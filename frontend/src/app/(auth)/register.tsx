@@ -19,7 +19,6 @@ const registerSchema = z
       .min(3, "Username must be at least 3 characters"),
     password: z.string().min(6, "Password must be at least 6 characters"),
     confirmPassword: z.string(),
-    birthDate: z.date({ message: "Please select your birth date" }),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords do not match",
