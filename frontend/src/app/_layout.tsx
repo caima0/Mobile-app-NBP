@@ -1,9 +1,10 @@
+import { ThemeProvider } from "@/context/themeContext";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
 export default function RootNavigator() {
   return (
-    <>
+    <ThemeProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
 
@@ -11,6 +12,6 @@ export default function RootNavigator() {
       </Stack>
 
       <StatusBar style="auto" />
-    </>
+    </ThemeProvider>
   );
 }

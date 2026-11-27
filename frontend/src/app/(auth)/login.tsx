@@ -1,14 +1,13 @@
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import {
-  Pressable,
+  TouchableOpacity,
   StyleSheet,
   Text,
   TextInput,
   View,
-  useColorScheme,
 } from "react-native";
-import { Colors } from "@/const/Colors";
+import { ThemeColors, useTheme } from "@/context/themeContext";
 
 export default function LoginScreen() {
   const [username, setUsername] = useState("");
@@ -16,18 +15,15 @@ export default function LoginScreen() {
 
   const router = useRouter();
 
-  const colorScheme = useColorScheme() ?? "light";
-  const theme = Colors[colorScheme];
-  const styles = createStyles(theme);
-
-  {
-    /*handleLogin placeholder for now */
-  }
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
       return;
     }
+
+    router.replace("/(tabs)");
   };
 
   return (
@@ -55,30 +51,29 @@ export default function LoginScreen() {
         autoCapitalize="none"
       />
 
-      <Pressable
+      <TouchableOpacity
         onPress={handleLogin}
-        style={({ pressed }) => [
-          styles.button,
-          pressed && styles.buttonPressed,
-        ]}
+        style={styles.button}
+        activeOpacity={0.85}
       >
         <Text style={styles.buttonText}>Login</Text>
-      </Pressable>
+      </TouchableOpacity>
 
-      <Pressable
+      <TouchableOpacity
         onPress={() => router.push("/register")}
         style={styles.linkCon}
+        activeOpacity={0.7}
       >
         <Text style={styles.linkText}>
           Don't have an account?{" "}
           <Text style={styles.linkHighlight}>Register</Text>
         </Text>
-      </Pressable>
+      </TouchableOpacity>
     </View>
   );
 }
 
-const createStyles = (theme: typeof Colors.light) =>
+const createStyles = (theme: ThemeColors) =>
   StyleSheet.create({
     container: {
       flex: 1,
@@ -116,10 +111,6 @@ const createStyles = (theme: typeof Colors.light) =>
       alignItems: "center",
       justifyContent: "center",
       marginTop: 10,
-    },
-
-    buttonPressed: {
-      opacity: 0.85,
     },
 
     buttonText: {
