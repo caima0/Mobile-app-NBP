@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         env_prefix="NBP_",
-        extra="forbid",
+        extra="ignore",
     )
 
     app_name: str = Field(default="NBP Exchange API", min_length=1)
