@@ -1,0 +1,236 @@
+@startuml
+title Backend — model klas
+skinparam classAttributeIconSize 0
+hide empty members
+
+package "Warstwa HTTP" {
+    class AuthRouter <<router>>
+    class WalletRouter <<router>>
+    class RatesRouter <<router>>
+    class OperationsRouter <<router>>
+
+    class RegisterRequest <<Pydantic>>
+    class LoginRequest <<Pydantic>>
+    class DepositRequest <<Pydantic>> {
+        operation_id: UUID
+        amount: Decimal
+    }
+    class ExchangeRequest <<Pydantic>> {
+        operation_id: UUID
+        source_currency: str
+        target_currency: str
+        source_amount: Decimal
+    }
+}
+
+package "Logika biznesowa" {
+    class AuthService {
+        +register(request)
+        +login(request)
+        +authenticate(token): User
+    }
+
+    class WalletService {
+        +get_balances(user_id)
+        +get_history(user_id)
+    }
+
+    class OperationService {
+        +deposit(user_id, request)
+        +exchange(user_id, request)
+        +get_result(user_id, operation_id)
+    }
+
+    class RateService {
+        +get_current(currency): Rate
+        +get_historical(currency, date): Rate
+        +get_exchange_rate(source, target): Rate
+    }
+
+    interface PasswordHasher {
+        +hash(password): str
+        +verify(password, hash): bool
+    }
+
+    interface TokenProvider {
+        +issue(user_id): str
+        +verify(token): UUID
+    }
+}
+
+package "Model domenowy" {
+    class User {
+        id: UUID
+        login: str
+        password_hash: str
+    }
+
+    class WalletBalance {
+        user_id: UUID
+        currency: str
+        amount: Decimal
+    }
+
+    class Operation {
+        id: UUID
+        user_id: UUID
+        request_fingerprint: str
+        type: OperationType
+        status: OperationStatus
+        created_at: datetime
+        completed_at: datetime?
+        error_code: str?
+    }
+
+    class Transaction {
+        id: UUID
+        operation_id: UUID
+        source_currency: str?
+        target_currency: str
+        source_amount: Decimal?
+        target_amount: Decimal
+        applied_rate: Decimal?
+        rate_date: date?
+        executed_at: datetime
+    }
+
+    class Rate {
+        currency: str
+        value: Decimal
+        effective_date: date
+        fetched_at: datetime
+        source: str
+    }
+
+    enum OperationType {
+        DEPOSIT
+        BUY
+        SELL
+    }
+
+    enum OperationStatus {
+        SUCCEEDED
+        REJECTED
+    }
+}
+
+package "Porty dostępu do danych" {
+    interface UserRepository {
+        +get_by_login(login): User
+        +add(user)
+    }
+
+    interface WalletRepository {
+        +get_balances(user_id)
+        +lock_balances(user_id, currencies)
+        +save(balance)
+    }
+
+    interface OperationRepository {
+        +claim(user_id, operation_id, fingerprint)
+        +get(user_id, operation_id): Operation
+        +save_result(operation)
+    }
+
+    interface TransactionRepository {
+        +add(transaction)
+        +get_history(user_id)
+    }
+
+    interface UnitOfWork {
+        +users: UserRepository
+        +wallets: WalletRepository
+        +operations: OperationRepository
+        +transactions: TransactionRepository
+        +commit()
+        +rollback()
+    }
+
+    interface RateProvider {
+        +get_current(currency): Rate
+        +get_historical(currency, date): Rate
+    }
+}
+
+package "Infrastruktura" {
+    class SqlAlchemyUnitOfWork
+    class SqlAlchemyUserRepository
+    class SqlAlchemyWalletRepository
+    class SqlAlchemyOperationRepository
+    class SqlAlchemyTransactionRepository
+    class NbpClient
+}
+
+AuthRouter ..> AuthService
+AuthRouter ..> RegisterRequest
+AuthRouter ..> LoginRequest
+
+WalletRouter ..> WalletService
+RatesRouter ..> RateService
+OperationsRouter ..> OperationService
+OperationsRouter ..> DepositRequest
+OperationsRouter ..> ExchangeRequest
+
+WalletRouter ..> AuthService : identyfikacja użytkownika
+RatesRouter ..> AuthService : identyfikacja użytkownika
+OperationsRouter ..> AuthService : identyfikacja użytkownika
+
+AuthService ..> UnitOfWork
+AuthService ..> PasswordHasher
+AuthService ..> TokenProvider
+WalletService ..> UnitOfWork
+OperationService ..> UnitOfWork
+OperationService ..> RateService
+RateService ..> RateProvider
+
+SqlAlchemyUnitOfWork ..|> UnitOfWork
+SqlAlchemyUserRepository ..|> UserRepository
+SqlAlchemyWalletRepository ..|> WalletRepository
+SqlAlchemyOperationRepository ..|> OperationRepository
+SqlAlchemyTransactionRepository ..|> TransactionRepository
+NbpClient ..|> RateProvider
+
+SqlAlchemyUnitOfWork *-- SqlAlchemyUserRepository
+SqlAlchemyUnitOfWork *-- SqlAlchemyWalletRepository
+SqlAlchemyUnitOfWork *-- SqlAlchemyOperationRepository
+SqlAlchemyUnitOfWork *-- SqlAlchemyTransactionRepository
+
+User "1" -- "0..*" WalletBalance
+User "1" -- "0..*" Operation
+Operation "1" -- "0..1" Transaction
+Operation --> OperationType
+Operation --> OperationStatus
+
+note bottom of UnitOfWork
+  Jedna transakcja bazy obejmuje zmiany sald,
+  zapis transakcji i końcowy wynik operacji.
+  Serwis potwierdza sukces dopiero po commit.
+end note
+
+note bottom of OperationRepository
+  Identyfikator operacji jest unikalny
+  w obrębie użytkownika.
+  claim zapewnia ochronę również
+  przy równoczesnych duplikatach.
+  Inne parametry tego samego ID oznaczają konflikt.
+end note
+
+note bottom of OperationStatus
+  Model przechowuje wyniki końcowe.
+  Brak wyniku nie oznacza odrzucenia:
+  poprzedni request może nadal być przetwarzany.
+end note
+
+note bottom of Transaction
+  Dla zasilenia pola źródłowe i kurs są puste.
+  Dla wymiany są wymagane.
+  Odrzucona operacja nie tworzy transakcji.
+end note
+
+note bottom of RateProvider
+  Granica integracji z API NBP.
+  Awaria źródła nie może powodować
+  częściowej zmiany sald.
+end note
+
+@enduml
