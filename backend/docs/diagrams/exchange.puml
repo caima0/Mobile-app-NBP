@@ -1,0 +1,153 @@
+@startuml
+title Backend — wymiana waluty i odzyskanie wyniku
+
+actor "Klient API" as Client
+participant "OperationsRouter" as Router
+participant "AuthService" as Auth
+participant "OperationService" as Service
+participant "RateService" as Rates
+participant "UnitOfWork / Repozytoria" as UOW
+database "PostgreSQL" as DB
+
+Client -> Router : Wymiana\n(token, operation_id, waluty, kwota)
+Router -> Auth : authenticate(token)
+
+alt Brak uwierzytelnienia
+    Auth --> Router : Błąd
+    Router --> Client : 401 Unauthorized
+else Użytkownik uwierzytelniony
+    Auth --> Router : user_id
+    Router -> Router : Walidacja schematu żądania
+
+    alt Niepoprawne dane
+        Router --> Client : 422 — błąd walidacji
+    else Poprawne dane
+        Router -> Service : exchange(user_id, request)
+        Service -> Service : Walidacja reguł wymiany\nObliczenie fingerprint parametrów
+
+        Service -> UOW : get(user_id, operation_id)
+        UOW -> DB : Odczyt wyniku operacji
+        DB --> UOW : Wynik albo brak wyniku
+        UOW --> Service : Wynik albo brak wyniku
+
+        alt Wynik już istnieje
+            Service -> Service : Porównanie fingerprint
+            alt Parametry zgodne
+                Service --> Router : Zapisany wynik
+                Router --> Client : Wynik bez ponownej wymiany
+            else Parametry różne
+                Service --> Router : Konflikt identyfikatora
+                Router --> Client : 409 Conflict
+            end
+
+        else Brak zapisanego wyniku
+            Service -> Rates : get_exchange_rate(source, target)
+
+            alt Kurs niedostępny lub niedopuszczalny
+                Rates --> Service : Błąd kursu
+                Service --> Router : Operacja niewykonana
+                Router --> Client : Rozpoznawalny błąd
+
+            else Kurs dostępny i dopuszczalny
+                Rates --> Service : Kurs i data obowiązywania
+
+                Service -> UOW : Rozpoczęcie transakcji
+                UOW -> DB : BEGIN
+
+                Service -> UOW : claim(user_id, operation_id, fingerprint)
+                UOW -> DB : Rezerwacja identyfikatora\nz ochroną przed współbieżnym duplikatem
+                DB --> UOW : Wynik rezerwacji
+                UOW --> Service : Nowa operacja / duplikat / konflikt
+
+                alt Duplikat lub konflikt wykryty przy claim
+                    Service -> UOW : rollback()
+                    UOW -> DB : ROLLBACK
+                    Service -> UOW : Odczyt zatwierdzonego wyniku\nw nowej transakcji
+                    UOW -> DB : SELECT wynik operacji
+                    DB --> UOW : Zapisany wynik i fingerprint
+                    UOW --> Service : Wynik
+                    Service --> Router : Ten sam wynik albo konflikt parametrów
+                    Router --> Client : Wynik bez ponownego wykonania albo 409
+
+                else Nowa operacja
+                    Service -> UOW : lock_balances(user_id, currencies)
+                    UOW -> DB : Blokada sald w ustalonej kolejności
+                    DB --> UOW : Salda
+                    UOW --> Service : Salda
+                    Service -> Service : Sprawdzenie środków\nObliczenia Decimal i zaokrąglenie
+
+                    alt Niewystarczające saldo
+                        Service -> UOW : save_result(REJECTED)
+                        UOW -> DB : Zapis odrzuconego wyniku
+                        Service -> UOW : commit()
+                        UOW -> DB : COMMIT
+                        DB --> UOW : Zatwierdzono
+                        UOW --> Service : Zatwierdzono
+                        Service --> Router : Odrzucona operacja
+                        Router --> Client : Błąd niewystarczających środków
+
+                    else Wystarczające saldo
+                        Service -> UOW : Zapis sald, transakcji\noraz wyniku SUCCEEDED
+                        UOW -> DB : UPDATE sald\nINSERT transakcji z kursem i czasem\nZapis wyniku operacji
+
+                        alt Błąd przed commit
+                            Service -> UOW : rollback()
+                            UOW -> DB : ROLLBACK
+                            Service --> Router : Błąd bez częściowej zmiany
+                            Router --> Client : Błąd usługi
+
+                        else Commit potwierdzony
+                            Service -> UOW : commit()
+                            UOW -> DB : COMMIT
+                            DB --> UOW : Zatwierdzono
+                            UOW --> Service : Zatwierdzono
+                            Service --> Router : Zapisany wynik SUCCEEDED
+                            Router ->x Client : Odpowiedź utracona w sieci
+
+                            note over Client
+                              Timeout: wynik nieznany.
+                              Nie oznacza anulowania.
+                            end note
+
+                            ... Ponowne połączenie ...
+
+                            Client -> Router : Sprawdzenie wyniku\n(token, ten sam operation_id)
+                            Router -> Auth : authenticate(token)
+                            Auth --> Router : user_id
+                            Router -> Service : get_result(user_id, operation_id)
+                            Service -> UOW : get(user_id, operation_id)
+                            UOW -> DB : Odczyt wyniku właściciela
+                            DB --> UOW : SUCCEEDED i zapisane dane
+                            UOW --> Service : Wynik
+                            Service --> Router : Potwierdzony wynik
+                            Router --> Client : Sukces odtworzony z bazy
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+note over Service, DB
+  Sukces rozstrzyga backend na podstawie zatwierdzonej transakcji.
+  Zmiany sald, historia i wynik operacji są zapisywane atomowo.
+  Po niejednoznacznym błędzie commit wynik należy sprawdzić
+  w nowej transakcji; nie wolno zakładać rollback.
+end note
+
+note over Client, Service
+  Brak wyniku podczas sprawdzania nie dowodzi odrzucenia.
+  Poprzednie żądanie może nadal działać.
+  Retry zachowuje operation_id oraz parametry.
+  Następnie klient odświeża portfel i historię.
+end note
+
+note over Rates
+  Integracja NBP odbywa się przed blokowaniem sald.
+  Wstępny odczyt wyniku pozwala obsłużyć zakończony
+  duplikat bez ponownego pobierania kursu.
+  claim ponownie sprawdza współbieżne wykonanie.
+end note
+
+@enduml
