@@ -1,0 +1,75 @@
+@startuml
+title Backend — odczyt aktualnego kursu
+
+actor "Klient API" as Client
+participant "RatesRouter" as Router
+participant "AuthService" as Auth
+participant "TokenProvider" as Tokens
+participant "RateService" as Service
+participant "NbpClient" as NbpClient
+participant "API NBP" as NBP
+
+Client -> Router : Żądanie kursu\n(token, kod waluty)
+Router -> Auth : authenticate(token)
+Auth -> Tokens : verify(token)
+
+alt Token niepoprawny lub wygasły
+    Tokens --> Auth : Błąd tokenu
+    Auth --> Router : Brak uwierzytelnienia
+    Router --> Client : 401 Unauthorized
+else Tożsamość potwierdzona
+    Tokens --> Auth : user_id
+    Auth --> Router : Uwierzytelniony użytkownik
+
+    Router -> Router : Walidacja formatu kodu waluty
+
+    alt Niepoprawny format
+        Router --> Client : 422 — błąd walidacji
+    else Poprawny format
+        Router -> Service : get_current(currency)
+        Service -> Service : Sprawdzenie obsługiwanej waluty
+
+        alt Waluta nieobsługiwana
+            Service --> Router : Błąd waluty
+            Router --> Client : 422 — nieobsługiwana waluta
+        else Waluta obsługiwana
+            Service -> NbpClient : get_current(currency)
+            NbpClient -> NBP : HTTPS — pobranie kursu
+
+            alt Poprawna odpowiedź NBP
+                NBP --> NbpClient : Kurs i data obowiązywania
+                NbpClient -> NbpClient : Walidacja odpowiedzi\nMapowanie na model Rate
+                NbpClient --> Service : Rate
+                Service --> Router : Rate
+                Router --> Client : 200 — kurs i data obowiązywania
+            else Brak opublikowanego kursu
+                NBP --> NbpClient : Brak danych
+                NbpClient --> Service : RateNotFound
+                Service --> Router : Brak kursu
+                Router --> Client : 404 — kurs niedostępny
+            else Timeout, awaria lub niepoprawne dane NBP
+                NbpClient --> Service : ExternalDataUnavailable
+                Service --> Router : Niedostępność źródła
+                Router --> Client : 503 — źródło niedostępne
+            end
+        end
+    end
+end
+
+note over Router, Service
+  Odczyt nie zmienia sald ani historii operacji.
+  Backend odpowiada za format i znaczenie odpowiedzi API.
+end note
+
+note over NbpClient, NBP
+  Granica zewnętrznego źródła danych.
+  Limit pojedynczej próby pobrania: 5 sekund.
+  Brak danych różni się od awarii źródła.
+end note
+
+note over Client, Router
+  Jeśli odpowiedź nie dotrze, odczyt można ponowić.
+  Nie powoduje to operacji finansowej.
+end note
+
+@enduml
