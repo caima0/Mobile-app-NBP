@@ -1,12 +1,17 @@
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.core.config import Settings, get_settings
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
+    if settings is None:
+        settings = get_settings()
+
     application = FastAPI(
-        title="NBP Exchange API",
-        version="0.1.0",
+        title=settings.app_name,
+        version=settings.app_version,
+        debug=settings.debug,
     )
     application.include_router(health_router, prefix="/api/v1")
     return application

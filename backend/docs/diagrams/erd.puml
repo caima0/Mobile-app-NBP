@@ -1,0 +1,111 @@
+@startuml
+title Backend — model danych PostgreSQL
+hide circle
+skinparam linetype ortho
+
+entity "users" as Users {
+    * id : UUID <<PK>>
+    --
+    * login : VARCHAR(50) <<UNIQUE>>
+    * password_hash : TEXT
+    * created_at : TIMESTAMPTZ
+}
+
+entity "wallet_balances" as Balances {
+    * user_id : UUID <<PK, FK>>
+    * currency : VARCHAR(3) <<PK>>
+    --
+    * amount : NUMERIC(20,2)
+}
+
+entity "operations" as Operations {
+    * user_id : UUID <<PK, FK>>
+    * operation_id : UUID <<PK>>
+    --
+    * request_fingerprint : VARCHAR(64)
+    * type : VARCHAR(10)
+    * status : VARCHAR(10)
+    * http_status : SMALLINT
+    * response_body : JSONB
+    * created_at : TIMESTAMPTZ
+    * completed_at : TIMESTAMPTZ
+    error_code : VARCHAR(64)
+}
+
+entity "transactions" as Transactions {
+    * id : UUID <<PK>>
+    --
+    * user_id : UUID <<FK>>
+    * operation_id : UUID <<FK>>
+    * target_currency : VARCHAR(3)
+    * target_amount : NUMERIC(20,2)
+    * executed_at : TIMESTAMPTZ
+    source_currency : VARCHAR(3)
+    source_amount : NUMERIC(20,2)
+    applied_rate : NUMERIC(20,10)
+    rate_date : DATE
+}
+
+Users ||--o{ Balances : posiada
+Users ||--o{ Operations : wykonuje
+Operations ||--o| Transactions : potwierdza
+
+note bottom of Users
+  Login jest normalizowany przed zapisem:
+  usunięcie skrajnych spacji i małe litery.
+  Unikalność dotyczy wartości znormalizowanej.
+  Hasło jest przechowywane wyłącznie jako hash.
+end note
+
+note bottom of Balances
+  PRIMARY KEY (user_id, currency)
+  FOREIGN KEY user_id REFERENCES users(id)
+  CHECK amount >= 0
+
+  Jeden użytkownik ma najwyżej jedno saldo danej waluty.
+  Wymiana nie może pozostawić częściowych zmian.
+end note
+
+note right of Operations
+  PRIMARY KEY (user_id, operation_id)
+  FOREIGN KEY user_id REFERENCES users(id)
+
+  type: DEPOSIT, BUY, SELL
+  status: SUCCEEDED, REJECTED
+
+  Przechowywane są tylko zatwierdzone wyniki końcowe.
+  response_body nie zawiera sekretów ani tokenów.
+  Wynik i HTTP status pozwalają odtworzyć odpowiedź.
+
+  Fingerprint obejmuje typ i znormalizowane parametry,
+  w tym kwotę oraz waluty.
+end note
+
+note bottom of Transactions
+  FOREIGN KEY (user_id, operation_id)
+    REFERENCES operations(user_id, operation_id)
+  UNIQUE (user_id, operation_id)
+
+  target_amount > 0
+
+  DEPOSIT:
+    target_currency = PLN
+    source_currency, source_amount,
+    applied_rate i rate_date są NULL.
+
+  BUY / SELL:
+    wszystkie pola źródłowe i kursowe są wymagane;
+    source_amount > 0, applied_rate > 0;
+    waluty źródłowa i docelowa są różne;
+    dokładnie jedna z walut to PLN.
+
+  Odrzucona operacja nie ma transakcji.
+  Udana operacja ma dokładnie jedną transakcję.
+end note
+
+note "Reguły przekrojowe między tabelami są sprawdzane\nprzez serwis w jednej transakcji bazy.\nCHECK dotyczy warunków możliwych do sprawdzenia\nw obrębie pojedynczego wiersza.\n\nOperacji i historii nie usuwamy kaskadowo.\nWszystkie znaczniki czasu są zapisywane jako TIMESTAMPTZ.\n\nRezerwacja operation_id i zapis końcowego wyniku\nodbywają się w jednej transakcji.\nStan pośredni nie jest zatwierdzany osobno." as Integrity
+
+Integrity .. Operations
+Integrity .. Transactions
+
+@enduml
