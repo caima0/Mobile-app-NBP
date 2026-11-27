@@ -1,0 +1,78 @@
+@startuml
+left to right direction
+
+actor "Gość" as Guest
+actor "Uwierzytelniony użytkownik" as User
+actor "API NBP" as NBP
+
+rectangle "Backend systemu wymiany walut" {
+    usecase "Rejestracja" as Register
+    usecase "Logowanie" as Login
+    usecase "Odczyt portfela" as Wallet
+    usecase "Zasilenie wirtualne PLN" as Deposit
+    usecase "Odczyt aktualnych kursów" as CurrentRates
+    usecase "Odczyt historycznych kursów" as HistoricalRates
+    usecase "Kupno waluty" as Buy
+    usecase "Sprzedaż waluty" as Sell
+    usecase "Odczyt historii operacji" as History
+    usecase "Sprawdzenie wyniku operacji" as OperationResult
+
+    usecase "Weryfikacja tożsamości\ni uprawnień" as Authorize
+    usecase "Walidacja operacji finansowej" as Validate
+    usecase "Ochrona przed powtórnym\nwykonaniem operacji" as Deduplicate
+    usecase "Atomowy zapis zmian sald\ni wyniku operacji" as Commit
+    usecase "Pobranie kursów z NBP" as FetchRates
+}
+
+Guest --> Register
+Guest --> Login
+
+User --> Wallet
+User --> Deposit
+User --> CurrentRates
+User --> HistoricalRates
+User --> Buy
+User --> Sell
+User --> History
+User --> OperationResult
+
+Wallet ..> Authorize : <<include>>
+Deposit ..> Authorize : <<include>>
+CurrentRates ..> Authorize : <<include>>
+HistoricalRates ..> Authorize : <<include>>
+Buy ..> Authorize : <<include>>
+Sell ..> Authorize : <<include>>
+History ..> Authorize : <<include>>
+OperationResult ..> Authorize : <<include>>
+
+Deposit ..> Validate : <<include>>
+Buy ..> Validate : <<include>>
+Sell ..> Validate : <<include>>
+
+Deposit ..> Deduplicate : <<include>>
+Buy ..> Deduplicate : <<include>>
+Sell ..> Deduplicate : <<include>>
+
+CurrentRates ..> FetchRates : <<include>>
+HistoricalRates ..> FetchRates : <<include>>
+
+NBP --> FetchRates
+
+note bottom of Commit
+  Zapis wykonywany tylko dla poprawnej,
+  nowej operacji finansowej.
+  Sukces jest potwierdzany po commit.
+end note
+
+note bottom of Deduplicate
+  Powtórzenie tej samej operacji zwraca
+  zapisany wynik bez ponownego wykonania.
+end note
+
+note "Dla nowej, poprawnej operacji:\n- wymiana wymaga kursu ustalonego przez backend;\n- zasilenie i wymiana zapisują zmiany atomowo.\nPowtórzenie zakończonej operacji nie wymaga\nponownego pobrania kursu ani zmiany sald." as FinancialFlow
+FinancialFlow .. Buy
+FinancialFlow .. Sell
+FinancialFlow .. Deposit
+FinancialFlow .. Commit
+
+@enduml
