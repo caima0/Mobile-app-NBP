@@ -33,8 +33,13 @@ Implementacja aplikacji mobilnej pozostaje poza zakresem tej części.
 - HTTPX — komunikacja z API NBP.
 - pytest — testy backendu.
 
-Jest to plan technologiczny. Na obecnym etapie zaimplementowano
-szkielet FastAPI i endpoint sprawdzający działanie usługi.
+Architektura opisuje system docelowy.
+Obecnie zaimplementowano konfigurację aplikacji, połączenie PostgreSQL,
+migrację tabeli użytkowników, rejestrację z hashowaniem Argon2id
+oraz testy integracyjne rejestracji.
+
+Logowanie, autoryzacja, portfele, integracja NBP i wymiana walut
+pozostają do implementacji.
 
 ## 4. Szkic architektury
 
@@ -127,3 +132,147 @@ Backend zapobiega ponownemu wykonaniu tej samej operacji.
 | Niedostępność NBP | Ograniczony czas oczekiwania i jednoznaczny błąd; brak niepotwierdzonego przeliczenia |
 | Konkurencyjne wymiany | Transakcje i kontrola współbieżności w bazie |
 | Nieuprawniony dostęp | Uwierzytelnianie i kontrola właściciela danych w backendzie |
+
+## 10. Uruchomienie lokalne
+
+### Wymagania
+
+- Python 3.14 — wersja używana podczas prac.
+- Docker Desktop z Docker Compose.
+- Polecenia wykonywane z katalogu backend.
+
+### Przygotowanie środowiska
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+```
+
+Przy pierwszej konfiguracji utwórz lokalny plik ustawień:
+
+```bash
+cp .env.example .env
+```
+
+Nie kopiuj ponownie pliku, jeśli .env już istnieje, aby nie nadpisać ustawień.
+W lokalnym .env ustaw niepuste POSTGRES_PASSWORD.
+Plik .env nie jest przechowywany w Git.
+
+```bash
+docker compose up -d db
+docker compose ps
+```
+
+Poczekaj, aż baza uzyska status healthy, a następnie wykonaj:
+
+```bash
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload
+```
+
+- Swagger: http://127.0.0.1:8000/docs
+- Health: http://127.0.0.1:8000/api/v1/health
+- PostgreSQL: 127.0.0.1:5433, jeśli nie zmieniono POSTGRES_PORT.
+
+Dane PostgreSQL są przechowywane w nazwanym wolumenie.
+Zmiana hasła w .env nie zmienia hasła użytkownika w już
+zainicjalizowanej bazie.
+
+### Sprawdzenie migracji
+
+```bash
+python -m alembic current
+python -m alembic check
+```
+
+### Testy
+
+```bash
+python -m pytest -q
+```
+
+Testy wymagają działającego PostgreSQL i zastosowanych migracji.
+Korzystają z bazy wskazanej przez lokalną konfigurację.
+Zmiany każdego testu są izolowane przez SAVEPOINT
+i wycofywane zewnętrzną transakcją.
+
+Zestaw testów jest przeznaczony do uruchamiania sekwencyjnego.
+Obejmuje rejestrację, normalizację loginu, zajęty login,
+walidację i bezpieczny format odpowiedzi.
+
+### Zatrzymanie
+
+Serwer API: Ctrl+C.
+
+```bash
+docker compose stop db
+```
+
+## 11. Zaimplementowane API
+
+### GET /api/v1/health
+
+Odpowiedź 200:
+
+```json
+{"status": "ok"}
+```
+
+Endpoint potwierdza działanie API, nie sprawdza dostępności bazy.
+
+### POST /api/v1/auth/register
+
+Żądanie:
+
+```json
+{
+  "login": "example_user",
+  "password": "Example-password-123"
+}
+```
+
+Login jest normalizowany przez usunięcie skrajnych spacji
+i zamianę liter na małe. Ma od 3 do 50 znaków.
+Dozwolone znaki: a–z, 0–9, podkreślenie, kropka i myślnik.
+
+Hasło ma od 8 do 128 znaków. Nie jest normalizowane.
+Dodatkowe pola żądania są odrzucane.
+
+Odpowiedź 201:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "login": "example_user",
+  "created_at": "2026-11-27T10:00:00Z"
+}
+```
+
+Odpowiedź nie zawiera hasła ani hasha.
+Rejestracja nie loguje użytkownika i nie zwraca tokenu.
+
+Odpowiedź 409 dla zajętego loginu:
+
+```json
+{
+  "detail": {
+    "code": "LOGIN_ALREADY_EXISTS",
+    "message": "Login is already registered."
+  }
+}
+```
+
+Odpowiedź 422 dla błędnego żądania zawiera kod VALIDATION_ERROR
+oraz listę błędów z polami location, message i type.
+Wartości wejściowe nie są kopiowane do odpowiedzi błędu.
+
+## 12. Aktualne ograniczenia
+
+- Brak logowania, tokenów i kontroli dostępu do danych użytkownika.
+- Brak portfela, zasileń, wymiany i historii operacji finansowych.
+- Brak integracji z NBP.
+- Mechanizmy odporności operacji finansowych są na etapie projektu.
+- Modele i diagramy systemu docelowego wykraczają poza gotowy kod.
+- Zgodność pola login i reguł walidacji z klientem mobilnym
+  wymaga uzgodnienia z osobą odpowiedzialną za frontend.
